@@ -15,10 +15,6 @@ use tracing::debug;
 pub(super) struct InsertSafeFfiCalls;
 
 impl<'tcx> crate::MirPass<'tcx> for InsertSafeFfiCalls {
-    fn is_enabled(&self, sess: &rustc_session::Session) -> bool {
-        sess.opts.unstable_opts.safeffi
-    }
-
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
         let typing_env = body.typing_env(tcx);
         let mut visitor = SafeFfiCastVisitor {
@@ -79,8 +75,8 @@ pub(super) fn is_safeffi_cast<'tcx>(
 ) -> Option<SafeFfiCastKind<'tcx>> {
     match rvalue {
         Rvalue::Ref(mir_region, borrow_kind, place) => {
-            let deref_ty = deref_pointer_type(place, local_decls)?;
-            if deref_ty.is_raw_ptr() {
+            let ptr_ty = deref_pointer_type(place, local_decls)?;
+            if ptr_ty.is_raw_ptr() {
                 Some(SafeFfiCastKind::RawToSafe {
                     region: *mir_region,
                     borrow_kind: *borrow_kind,
@@ -97,7 +93,11 @@ pub(super) fn is_safeffi_cast<'tcx>(
     }
 }
 
-/// If `place` ends in a deref, return the type of the pointer being dereferenced.
+/// We expect `place` to be `(*raw_ptr)`, i.e. it ends in a `Deref` projection.
+/// `place.ty()` would give the type *after* that deref (the
+/// pointee `T`); we want the type of the pointer itself
+/// (`*mut T` / `*const T`), which is the type of the place one
+/// projection level up.
 fn deref_pointer_type<'tcx>(
     place: &Place<'tcx>,
     local_decls: &LocalDecls<'tcx>,
@@ -107,6 +107,7 @@ fn deref_pointer_type<'tcx>(
         return None;
     }
     for proj in iter {
+        //FIXME: there might be more projections that we need to handle here like `Index` or `ConstantIndex`.
         if let ProjectionElem::Field(_, ty) = proj {
             return Some(ty);
         }
@@ -161,6 +162,13 @@ impl<'tcx> MutVisitor<'tcx> for SafeFfiCastVisitor<'_, 'tcx> {
                         debug!(
                             "[safeffi] cast detected at {:?}: raw_ptr={:?} referent size={} align={}",
                             location, raw_ptr, size, align
+                        );
+                        self.tcx.dcx().span_note(
+                            statement.source_info.span,
+                            format!(
+                                "[safeffi] SafeFFI `RawToSafe` cast detected: raw_ptr={raw_ptr:?}, \
+                                 referent size={size}, align={align}"
+                            ),
                         );
                         self.cast_sites.push(SafeFfiCastSite {
                             location,
