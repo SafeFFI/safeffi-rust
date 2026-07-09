@@ -158,6 +158,7 @@ declare_passes! {
     // by custom rustc drivers, running all the steps by themselves. See #114628.
     pub mod inline : Inline, ForceInline;
     mod impossible_predicates : ImpossiblePredicates;
+    mod insert_safeffi_calls : InsertSafeFfiCalls;
     mod instsimplify : InstSimplify { BeforeInline, AfterSimplifyCfg };
     mod jump_threading : JumpThreading;
     mod known_panics_lint : KnownPanicsLint;
@@ -602,6 +603,11 @@ pub fn run_analysis_to_runtime_passes<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'
     debug!("runtime_mir_lowering({:?})", did);
     run_runtime_lowering_passes(tcx, body);
     assert!(body.phase == MirPhase::Runtime(RuntimePhase::Initial));
+
+    // SafeFFI: only slotted into the pipeline at all when `-Zsafeffi` is set.
+    if tcx.sess.opts.unstable_opts.safeffi {
+        pm::run_passes_no_validate(tcx, body, &[&insert_safeffi_calls::InsertSafeFfiCalls], None);
+    }
 
     debug!("runtime_mir_cleanup({:?})", did);
     run_runtime_cleanup_passes(tcx, body);
